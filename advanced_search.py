@@ -54,6 +54,22 @@ def sizeof_fmt(num, suffix='B'):
         num /= 1024.0
     return f"{num:.1f}Y{suffix}"
 
+# Known MIME types we might want to treat as downloadable files:
+KNOWN_MIME_TYPES = {
+    "application/pdf": ".pdf",
+    "application/zip": ".zip",
+    "application/x-rar-compressed": ".rar",
+    "application/x-7z-compressed": ".7z",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "audio/mpeg": ".mp3",
+    "video/mp4": ".mp4",
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    # add more if you wish
+}
+
 # ------------------------------------------------------------------------------
 # Playwright Helper Functions
 async def human_like_scroll(page):
@@ -75,6 +91,7 @@ async def human_like_interactions(page):
     await asyncio.sleep(random.uniform(0.5, 1.5))
 
 async def get_file_size(url, page):
+    """Returns a human-readable file size string or 'Unknown Size' if not available."""
     try:
         response = await page.request.head(url)
         length = response.headers.get('Content-Length', None)
@@ -86,6 +103,7 @@ async def get_file_size(url, page):
         return "Unknown Size"
 
 async def get_pdf_metadata(url, page):
+    """Fetch PDF from the given URL and extract minimal metadata."""
     try:
         resp = await page.request.get(url, timeout=15000)
         if resp.ok:
@@ -122,7 +140,7 @@ async def perform_bing_search(query, num_results, page):
                 if len(urls) >= num_results:
                     break
         return urls
-    except TimeoutError:
+    except PlaywrightTimeoutError:
         logger.error("Bing search timed out.")
         return []
     except Exception as e:
@@ -131,7 +149,8 @@ async def perform_bing_search(query, num_results, page):
 
 async def extract_downloadable_files(url, page, custom_ext_list):
     """
-    Analyze the page for direct file links or Google Drive links.
+    Analyze the page for direct file links, or Google Drive links, or 
+    files indicated by HEAD request checks. 
     `custom_ext_list` is a list of additional file extensions to consider.
     """
     found_files = []
@@ -154,32 +173,26 @@ async def extract_downloadable_files(url, page, custom_ext_list):
         anchors = soup.find_all('a', href=True)
         for a in anchors:
             href = a['href'].strip()
+            if not href:
+                continue
 
-            # 1) Known or custom extension
-            if any(href.lower().endswith(ext) for ext in all_exts):
-                if href.startswith('http'):
-                    file_url = href
-                elif href.startswith('/'):
-                    parsed = urlparse(url)
-                    file_url = f"{parsed.scheme}://{parsed.netloc}{href}"
-                else:
+            # Build the absolute URL if necessary
+            if href.startswith('http'):
+                file_url = href
+            elif href.startswith('/'):
+                parsed = urlparse(url)
+                file_url = f"{parsed.scheme}://{parsed.netloc}{href}"
+            else:
+                # Some relative or unusual link
+                parsed = urlparse(url)
+                if not parsed.scheme or not parsed.netloc:
+                    # Skip if we cannot form a valid absolute URL
                     continue
+                base_path = parsed.path.rsplit('/', 1)[0]
+                file_url = f"{parsed.scheme}://{parsed.netloc}{base_path}/{href}"
 
-                size_str = await get_file_size(file_url, page)
-                meta = {}
-                # PDF metadata
-                if file_url.lower().endswith('.pdf'):
-                    meta = await get_pdf_metadata(file_url, page)
-
-                found_files.append({
-                    'url': file_url,
-                    'filename': os.path.basename(file_url.split('?')[0]),
-                    'size': size_str,
-                    'metadata': meta
-                })
-
-            # 2) Google Drive link
-            elif "drive.google.com" in href:
+            # Check #1: Google Drive link detection
+            if "drive.google.com" in href.lower():
                 file_id = None
                 match1 = re.search(r'/file/d/([^/]+)/', href)
                 if match1:
@@ -199,9 +212,70 @@ async def extract_downloadable_files(url, page, custom_ext_list):
                         'size': size_str,
                         'metadata': {}
                     })
+                continue
+
+            # Check #2: Known or custom extension
+            lower_href = href.lower()
+            if any(lower_href.endswith(ext) for ext in all_exts):
+                # It's a recognized direct file link
+                size_str = await get_file_size(file_url, page)
+
+                meta = {}
+                if file_url.lower().endswith('.pdf'):
+                    meta = await get_pdf_metadata(file_url, page)
+
+                found_files.append({
+                    'url': file_url,
+                    'filename': os.path.basename(file_url.split('?')[0]),
+                    'size': size_str,
+                    'metadata': meta
+                })
+            else:
+                # Check #3: Use HEAD request to see if it's a known file by MIME type
+                try:
+                    head_resp = await page.request.head(file_url, timeout=8000)
+                    if head_resp.ok:
+                        ctype = head_resp.headers.get("Content-Type", "").lower()
+                        if ctype in KNOWN_MIME_TYPES:
+                            # We treat this as a file
+                            # If there's a content-disposition filename, we can use that;
+                            # otherwise, we'll guess from the URL
+                            cdisp = head_resp.headers.get("Content-Disposition", "")
+                            filename = os.path.basename(file_url.split('?')[0])
+                            if cdisp:
+                                mt = re.search(r'filename\*?="?([^";]+)', cdisp)
+                                if mt:
+                                    cdisp_fname = mt.group(1).strip('"').strip()
+                                    if cdisp_fname:
+                                        filename = cdisp_fname
+                            else:
+                                # If there's no extension in the URL, attach the known extension
+                                base_part, ext_part = os.path.splitext(filename)
+                                if not ext_part:
+                                    known_ext = KNOWN_MIME_TYPES[ctype]
+                                    filename = base_part + known_ext
+
+                            size_str = await get_file_size(file_url, page)
+
+                            meta = {}
+                            # PDF metadata if relevant
+                            if KNOWN_MIME_TYPES[ctype] == '.pdf':
+                                meta = await get_pdf_metadata(file_url, page)
+
+                            found_files.append({
+                                'url': file_url,
+                                'filename': filename,
+                                'size': size_str,
+                                'metadata': meta
+                            })
+                except PlaywrightTimeoutError:
+                    # skip link if HEAD request times out
+                    pass
+                except Exception:
+                    pass
 
         return found_files
-    except TimeoutError:
+    except PlaywrightTimeoutError:
         logger.error(f"Timeout extracting from {url}")
         return []
     except Exception as e:
@@ -256,7 +330,7 @@ async def download_file(file_info, save_dir, page, referer):
             f.write(data)
         logger.info(f"Downloaded: {path}")
         return path
-    except TimeoutError:
+    except PlaywrightTimeoutError:
         logger.error(f"Timeout downloading {file_url}")
         return None
     except Exception as e:
@@ -305,7 +379,7 @@ class DownloadManager:
         return await perform_bing_search(self.query, self.num_results, self.page)
 
     async def analyze_url(self, url, custom_ext_list):
-        """ Now includes a list of custom extensions. """
+        """Now includes a list of custom extensions and advanced MIME checks."""
         return await extract_downloadable_files(url, self.page, custom_ext_list)
 
     async def download_files(self, file_list, directory, referer):
@@ -335,8 +409,7 @@ def build_gradio_app():
             label="Select a mode:",
         )
 
-        # Shared "Advanced Options" for user-specified file extensions
-        # We'll pass them along to the extraction function
+        # Shared "Advanced Options"
         with gr.Accordion("Advanced Options (Optional)", open=False):
             custom_extensions = gr.Textbox(
                 label="Custom File Extensions (comma-separated)",
@@ -347,10 +420,10 @@ def build_gradio_app():
                 "`.pdf, .docx, .zip, .rar, .exe, .mp3, .mp4, .avi, .mkv, .png, .jpg, .jpeg, .gif`\n"
             )
 
-        # A "Clear Logs" button to reset the logs box
+        # A "Clear Logs" button
         def clear_logs_action():
             return ""
-        
+
         # ----------------------------------------------------------------
         # Page A: Manual URL
         # ----------------------------------------------------------------
@@ -390,7 +463,6 @@ def build_gradio_app():
                 if not url_val:
                     return (gr.update(choices=[], value=[]), [], None, "Please enter a URL first.")
 
-                # Convert custom_ext_str (comma-separated) -> list
                 exts = [x.strip() for x in custom_ext_str.split(",") if x.strip()]
 
                 if mgr is None:
@@ -441,7 +513,6 @@ def build_gradio_app():
                 if not selected:
                     return "No files selected."
 
-                # Re-check the current files
                 exts = [x.strip() for x in custom_ext_str.split(",") if x.strip()]
                 discovered = await manager.analyze_url(last_url, exts)
                 try:
@@ -692,6 +763,10 @@ def build_gradio_app():
 # MAIN
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    import asyncio
     app = build_gradio_app()
-    asyncio.run(app.launch(server_name="127.0.0.1", server_port=7860))
+    # Try port 7860; if it's unavailable, fall back to port 0 (an open random port).
+    try:
+        asyncio.run(app.launch(server_name="127.0.0.1", server_port=7860))
+    except OSError:
+        print("Port 7860 is busy. Trying a random open port...")
+        asyncio.run(app.launch(server_name="127.0.0.1", server_port=0))
