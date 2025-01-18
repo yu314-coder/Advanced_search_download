@@ -30,7 +30,7 @@ A sophisticated file downloading tool with web interface, supporting both manual
 - Progress tracking and status updates
 
 ## Quick Start with Manager
-
+```
 1. Clone the repository:
 ```bash
 git clone https://github.com/yu314-coder/Advanced_search_download.git
