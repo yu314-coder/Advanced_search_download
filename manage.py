@@ -115,7 +115,7 @@ def clone_or_pull_repo():
 
 def run_search_script():
     python = get_venv_python()
-    return run_command([python, "download_script.py"])
+    return run_command([python, "advanced.py"])
 
 def setup():
     if not check_python_version():
