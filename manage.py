@@ -34,36 +34,6 @@ def get_venv_pip():
     pip_exe = "pip.exe" if is_windows() else "pip"
     return os.path.join(VENV_DIR, bin_dir, pip_exe)
 
-def install_linux_dependencies():
-    try:
-        print("Installing Linux system dependencies...")
-        required_libs = [
-            "libgstgl-1.0-0",
-            "gstreamer1.0-plugins-base",
-            "libavif13",
-            "libenchant-2",
-            "libsecret-1-0",
-            "libhyphen0",
-            "libmanette-0.2-0",
-            "gstreamer1.0-plugins-bad",
-            "libgstreamer1.0-0",
-            "libgstreamer-plugins-base1.0-0",
-            "libgstreamer-plugins-bad1.0-0",
-            "gstreamer1.0-plugins-good",
-            "gstreamer1.0-plugins-ugly"
-        ]
-        
-        subprocess.run(["sudo", "apt-get", "update"], check=True)
-        subprocess.run(["sudo", "apt-get", "install", "-y"] + required_libs, check=True)
-        print("System dependencies installed successfully!")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"Error installing system dependencies: {e}")
-        print("\nPlease install the following packages manually:")
-        for lib in required_libs:
-            print(f"  - {lib}")
-        return False
-
 def check_and_install_system_dependencies():
     print("Checking system dependencies...")
     
@@ -98,13 +68,31 @@ def check_and_install_system_dependencies():
                 sys.exit(1)
         
         # Install Linux-specific dependencies
-        if not install_linux_dependencies():
-            print("Warning: Some system dependencies could not be installed.")
-            input("Press Enter to continue anyway, or Ctrl+C to exit...")
+        try:
+            print("Installing Linux dependencies...")
+            subprocess.run(["sudo", "apt-get", "update"], check=True)
+            subprocess.run(["sudo", "apt-get", "install", "-y",
+                "libgstgl-1.0-0",
+                "gstreamer1.0-plugins-base",
+                "libavif13",
+                "libenchant-2",
+                "libsecret-1-0",
+                "libhyphen0",
+                "libmanette-0.2-0",
+                "gstreamer1.0-plugins-bad",
+                "libgstreamer1.0-0",
+                "libgstreamer-plugins-base1.0-0",
+                "libgstreamer-plugins-bad1.0-0",
+                "gstreamer1.0-plugins-good",
+                "gstreamer1.0-plugins-ugly"
+            ], check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: Error installing some Linux dependencies: {e}")
+            print("You may need to install missing dependencies manually.")
 
 def run_command(cmd, cwd=None, shell=False):
     try:
-        process = subprocess.run(cmd, cwd=cwd, check=True, shell=shell, 
+        process = subprocess.run(cmd, cwd=cwd, check=True, shell=shell,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if process.stdout:
             print(process.stdout.decode())
@@ -152,8 +140,7 @@ playwright>=1.40.0
 beautifulsoup4>=4.12.0
 PyPDF2>=3.0.0
 asyncio>=3.4.3
-urllib3>=2.0.0
-gitpython>=3.1.0""")
+urllib3>=2.0.0""")
     
     print("Installing requirements...")
     return run_command([pip, "install", "-r", "requirements.txt"])
@@ -167,50 +154,73 @@ def install_playwright():
     return True
 
 def clone_or_pull_repo():
+    print("Checking repository status...")
+    
+    # List of expected files
+    expected_files = [
+        "README.md",
+        "manage.py",
+        "Advanced_search.py",
+        "requirements.txt"
+    ]
+    
     if not os.path.exists(".git"):
-        print("Cloning repository...")
-        return run_command(["git", "clone", GITHUB_REPO, "."])
-    else:
-        print("Updating repository...")
-        return run_command(["git", "pull"])
+        print("Initializing new repository...")
+        if run_command(["git", "init"]):
+            run_command(["git", "remote", "add", "origin", GITHUB_REPO])
+            print("Remote added successfully.")
+        else:
+            print("Failed to initialize repository.")
+            return False
+    
+    # Stash any local changes
+    print("Saving local changes...")
+    run_command(["git", "stash"])
+    
+    # Force pull from remote
+    print("Pulling latest version...")
+    success = run_command(["git", "fetch", "origin"])
+    if success:
+        success = run_command(["git", "reset", "--hard", "origin/main"])
+        if success:
+            print("Repository updated successfully!")
+            
+            # Verify all required files exist
+            missing_files = [f for f in expected_files if not os.path.exists(f)]
+            if missing_files:
+                print("\nWarning: Missing files after update:", missing_files)
+                return False
+            return True
+    
+    print("Failed to update repository.")
+    return False
 
 def run_search_script():
     python = get_venv_python()
-    script_names = ["download_script.py", "advanced.py", "search.py", "main.py"]
+    script_name = "Advanced_search.py"
     
-    # Find the correct script
-    script_path = None
-    for name in script_names:
-        if os.path.exists(name):
-            script_path = name
-            break
-    
-    if not script_path:
-        print("Error: No main script found!")
-        print("Looking for:", ", ".join(script_names))
+    if not os.path.exists(script_name):
+        print(f"Error: {script_name} not found!")
         return False
     
-    print(f"Running {script_path}...")
-    return run_command([python, script_path])
+    print(f"Running {script_name}...")
+    return run_command([python, script_name])
 
 def check_script_configuration():
-    script_names = ["download_script.py", "advanced.py", "search.py", "main.py"]
-    found_script = False
+    required_files = [
+        "README.md",
+        "manage.py",
+        "Advanced_search.py",
+        "requirements.txt"
+    ]
     
-    for name in script_names:
-        if os.path.exists(name):
-            found_script = True
-            break
+    missing_files = [f for f in required_files if not os.path.exists(f)]
     
-    if not found_script:
-        print("\nWarning: Main script not found!")
-        print("Looking for:", ", ".join(script_names))
+    if missing_files:
+        print("\nWarning: Missing required files:")
+        for file in missing_files:
+            print(f"  - {file}")
         return False
-    
-    if not os.path.exists("requirements.txt"):
-        print("\nWarning: requirements.txt not found!")
-        return False
-    
     return True
 
 def setup():
@@ -246,13 +256,11 @@ def handle_menu_choice(choice):
     if choice == "1":
         print("\nUpdating from GitHub...")
         clone_or_pull_repo()
-        time.sleep(1)
         
     elif choice == "2":
         print("\nUpdating packages...")
         install_requirements()
         install_playwright()
-        time.sleep(1)
         
     elif choice == "3":
         print("\nStarting Advanced Search Download...")
