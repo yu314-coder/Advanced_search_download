@@ -8,7 +8,7 @@ import venv
 import shutil
 from pathlib import Path
 
-GITHUB_REPO = "https://github.com/yourusername/advanced-file-downloader.git"
+GITHUB_REPO = "https://github.com/yu314-coder/Advanced_search_download"
 VENV_DIR = "venv"
 REQUIRED_PYTHON_VERSION = (3, 8)
 
