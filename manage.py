@@ -3,12 +3,12 @@ import os
 import sys
 import platform
 import subprocess
-import argparse
 import venv
 import shutil
 from pathlib import Path
+import time
 
-GITHUB_REPO = "https://github.com/yu314-coder/Advanced_search_download"
+GITHUB_REPO = "https://github.com/yu314-coder/Advanced_search_download.git"
 VENV_DIR = "venv"
 REQUIRED_PYTHON_VERSION = (3, 8)
 
@@ -31,6 +31,39 @@ def get_venv_pip():
     pip_exe = "pip.exe" if is_windows() else "pip"
     return os.path.join(VENV_DIR, bin_dir, pip_exe)
 
+def check_and_install_system_dependencies():
+    print("Checking system dependencies...")
+    
+    # Check pip
+    try:
+        import pip
+        print("pip is already installed.")
+    except ImportError:
+        print("Installing pip...")
+        subprocess.run([get_python_cmd(), "-m", "ensurepip", "--default-pip"], check=True)
+
+    # Check git
+    if is_windows():
+        try:
+            subprocess.run(["git", "--version"], check=True, capture_output=True)
+            print("git is already installed.")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print("Please install Git for Windows from https://git-scm.com/download/win")
+            sys.exit(1)
+    else:
+        try:
+            subprocess.run(["git", "--version"], check=True, capture_output=True)
+            print("git is already installed.")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            if os.path.exists("/etc/debian_version"):
+                subprocess.run(["sudo", "apt-get", "update"], check=True)
+                subprocess.run(["sudo", "apt-get", "install", "-y", "git"], check=True)
+            elif os.path.exists("/etc/redhat-release"):
+                subprocess.run(["sudo", "yum", "install", "-y", "git"], check=True)
+            else:
+                print("Please install git manually for your system")
+                sys.exit(1)
+
 def run_command(cmd, cwd=None, shell=False):
     try:
         subprocess.run(cmd, cwd=cwd, check=True, shell=shell)
@@ -48,7 +81,7 @@ def check_python_version():
 
 def create_virtual_env():
     if os.path.exists(VENV_DIR):
-        print(f"Virtual environment already exists in {VENV_DIR}")
+        print("Virtual environment already exists.")
         return True
     
     print("Creating virtual environment...")
@@ -88,6 +121,8 @@ def setup():
     if not check_python_version():
         return False
     
+    check_and_install_system_dependencies()
+    
     if not create_virtual_env():
         return False
     
@@ -100,35 +135,63 @@ def setup():
     print("Setup completed successfully!")
     return True
 
-def main():
-    parser = argparse.ArgumentParser(description="Manage the Advanced File Downloader project")
-    parser.add_argument("command", choices=["setup", "run", "update", "clean"],
-                       help="Command to execute")
-    
-    args = parser.parse_args()
-    
-    if args.command == "setup":
-        setup()
-    
-    elif args.command == "run":
-        if not os.path.exists(VENV_DIR):
-            print("Virtual environment not found. Running setup first...")
-            if not setup():
-                return
-        run_search_script()
-    
-    elif args.command == "update":
+def display_menu():
+    print("\n--- Advanced Search Download Manager ---")
+    print("1. Update all scripts from GitHub")
+    print("2. Update installed packages")
+    print("3. Run Advanced Search Download")
+    print("4. Clean environment")
+    print("5. Exit")
+
+def handle_menu_choice(choice):
+    if choice == "1":
+        print("\nUpdating from GitHub...")
         clone_or_pull_repo()
-        setup()
-    
-    elif args.command == "clean":
+        time.sleep(1)
+        
+    elif choice == "2":
+        print("\nUpdating packages...")
+        install_requirements()
+        install_playwright()
+        time.sleep(1)
+        
+    elif choice == "3":
+        print("\nStarting Advanced Search Download...")
+        run_search_script()
+        
+    elif choice == "4":
+        print("\nCleaning environment...")
         if os.path.exists(VENV_DIR):
-            print("Removing virtual environment...")
             shutil.rmtree(VENV_DIR)
         if os.path.exists("__pycache__"):
-            print("Removing Python cache...")
             shutil.rmtree("__pycache__")
-        print("Cleanup completed!")
+        print("Environment cleaned!")
+        setup()
+        
+    elif choice == "5":
+        print("\nExiting...")
+        sys.exit(0)
+        
+    else:
+        print("\nInvalid choice. Please try again.")
+
+def main():
+    # Initial setup check
+    if not os.path.exists(VENV_DIR):
+        print("First-time setup detected. Installing dependencies...")
+        setup()
+    
+    while True:
+        display_menu()
+        choice = input("Enter your choice (1-5): ")
+        handle_menu_choice(choice)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nExiting...")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\nAn error occurred: {e}")
+        sys.exit(1)
